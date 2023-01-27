@@ -14,7 +14,7 @@ class FincaRaizScraper:
         
         self.test = None
         
-        self.driver = webdriver.Chrome()
+        self.driver = webdriver.Chrome(executable_path='driver/chromedriver.exe')
         
         self.data = {
             'Tipo': [],
