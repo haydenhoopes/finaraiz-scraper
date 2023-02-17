@@ -9,6 +9,7 @@ import pandas as pd
 class FincaRaizScraper:
     def __init__(self):
         self.cities = []
+        self.current_page = 1
     
         self.base_url = 'https://www.fincaraiz.com.co'
         
@@ -38,7 +39,6 @@ class FincaRaizScraper:
             'Características': [],
             'Precio (COP)': [],
             'Descripción general': [],
-            'Código Fincaraíz': [],
             'No. Fotos': [],
             'Fecha Sacada': [],
             'Fecha Publicada': [],
@@ -57,26 +57,25 @@ class FincaRaizScraper:
     
     def go_to_city(self, city, pages_per_city):
         self.change_tab(0)
+        self.current_page = 1
         self.driver.get(self.base_url + '/apartamentos-casas/venta?ubicacion=' + city.replace(' ', '+'))
         sleep(3)
         for page in range(pages_per_city):
             houses = self.get_houses_on_page()
             self.process_houses_on_page()
-            self.next_page()
+            self.next_page(city)
         
     def go(self, pages_per_city=10):
         for city in self.cities:
             self.change_tab(0)
             self.go_to_city(city, pages_per_city)
             
-    def next_page(self):
+    def next_page(self, city):
         self.change_tab(0)
-        btns = self.driver.find_elements(By.CLASS_NAME, "MuiPaginationItem-page")
-        next_button = btns[-1]
-        next_button.click()
+        self.current_page += 1
+        self.driver.get(self.base_url + '/apartamentos-casas/venta?ubicacion=' + city + '&pagina=' + str(self.current_page))
         sleep(4)
-        
-            
+             
     def get_houses_on_page(self):
         html = self.driver.page_source
         self.test = html
@@ -99,12 +98,19 @@ class FincaRaizScraper:
         
         for house in houses:
             self.driver.switch_to.window(self.driver.window_handles[1])
-            print(self.data)
+            sleep(1.3)
             self.process_single_house()
             self.driver.close()
+            
+    def error_on_page(self, house):
+        if house.find('svg', {'class':'icon-error-sad'}) is not None:
+            return True
     
     def process_single_house(self):        
         house = BeautifulSoup(self.driver.page_source, 'html.parser')
+        
+        if self.error_on_page(house):
+            return
         
         # Get URL
         self.data['Enlace'].append(self.driver.current_url)
@@ -116,28 +122,36 @@ class FincaRaizScraper:
             i = 0
             p_tags = house.find_all('p')
 
-            if f == 'Propiedad' and 'Código Fincaraíz' not in p_tags[2].text:
-                self.data[f].append(p_tags[2].text.split(' en ')[0])
+            if f == 'Propiedad':
+                temp_text = p_tags[2].text.split(' en ')
+                if len(temp_text) == 2:
+                    self.data[f].append(p_tags[2].text.split(' en ')[0])
+                else:
+                    self.data[f].append(p_tags[2].text)
 
-            elif f == 'Acción' and 'Código Fincaraíz' not in p_tags[2].text:
-                self.data[f].append(p_tags[2].text.split(' en ')[1])
+            elif f == 'Acción':
+                temp_text = p_tags[2].text.split(' en ')
+                if len(temp_text) == 2:
+                    self.data[f].append(p_tags[2].text.split(' en ')[1])
+                else:
+                    self.data[f].append(None)
 
-            elif f == 'Barrio' and len(self.data['Barrio']) < len(self.data['Enlace']) and len(p_tags[3].text.split(' - ')) == 3 and 'Código Fincaraíz' not in p_tags[3].text:
+            elif f == 'Barrio' and len(self.data['Barrio']) < len(self.data['Enlace']) and len(p_tags[3].text.split(' - ')) == 3:
                 self.data[f].append(p_tags[3].text.split(' - ')[0])
 
-            if f == 'Ciudad' and len(p_tags[3].text.split(' - ')) == 3 and 'Código Fincaraíz' not in p_tags[2].text:
+            if f == 'Ciudad' and len(p_tags[3].text.split(' - ')) == 3:
                 self.data[f].append(p_tags[3].text.split(' - ')[1])
-            elif f == 'Ciudad' and 'Código Fincaraíz' not in p_tags[2].text:
+            elif f == 'Ciudad':
                 self.data[f].append(p_tags[3].text.split(' - ')[0])
 
-            if f == 'Departamento' and len(p_tags[3].text.split(' - ')) == 3 and 'Código Fincaraíz' not in p_tags[2].text:
+            if f == 'Departamento' and len(p_tags[3].text.split(' - ')) == 3:
                 self.data[f].append(p_tags[3].text.split(' - ')[2])
 
             elif f == 'No. Fotos':
                 self.data[f].append(p_tags[4].text.split(' / ')[-1])
 
             for p in p_tags:
-                if f in p.text and len(self.data[f]) < len(self.data['Enlace']) and 'Código Fincaraíz' not in p_tags[2].text:
+                if f in p.text and len(self.data[f]) < len(self.data['Enlace']):
                     if f == 'Características':
                         self.data[f].append([c.text for c in p_tags[i+1:-9]])
                         break
@@ -146,8 +160,10 @@ class FincaRaizScraper:
                         break
                     elif f == 'Fecha Publicada' and 'hace' in p.text:
                         self.data[f].append(p.text)
+                        break
                     else:
                         self.data[f].append(p_tags[i+1].text.strip('$\xa0').strip('*m²'))
+                        break
 
                 i += 1
 
@@ -170,7 +186,18 @@ class FincaRaizScraper:
                 error_list.append({key: len(self.data[key])})
         print(f'Errors: {error_list}')
         print('--'*40)
-
+        
+        return len(error_list) == 0
+    
+    def trim(self):
+        if self.validate() == False:
+            bad_len = len(self.data['Enlace'])
+            for k in self.data.keys():
+                if len(self.data[k]) == bad_len:
+                    self.data[k].pop()
+        print("Done trimming.")
+        return True
+    
     def close(self):
         self.driver.switch_to.window(self.driver.window_handles[0])
         self.driver.close()
